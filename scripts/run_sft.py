@@ -24,6 +24,7 @@ from alignment import (
     get_quantization_config,
     get_tokenizer,
 )
+from transformers import get_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,60 @@ def main():
     ########################
     # Initialize the Trainer
     ########################
+    # Build optimizers tuple if user requested a custom optimizer provided by external packages
+    optimizers = (None, None)
+    try:
+        muon_opts = {
+            "MuonWithAuxAdam": "MuonWithAuxAdam",
+            "MuonWithAuxAdam_sigmoid": "MuonWithAuxAdam_sigmoid",
+            "SingleDeviceMuonWithAuxAdam": "SingleDeviceMuonWithAuxAdam",
+            "SingleDeviceMuonWithAuxAdam_sigmoid": "SingleDeviceMuonWithAuxAdam_sigmoid",
+        }
+        if getattr(training_args, "optim", None) in muon_opts:
+            try:
+                # import names dynamically, if package is installed
+                import importlib
+
+                sigmoid_mod = importlib.import_module("sigmoid_muon")
+                OptimClass = getattr(sigmoid_mod, muon_opts[training_args.optim])
+                # prefer explicit muon/aux lr if provided in config; fall back to training_args.learning_rate
+                opt_kwargs = {
+                    "lr": getattr(training_args, "learning_rate", None),
+                    "weight_decay": getattr(training_args, "weight_decay", 0.0),
+                }
+                if getattr(training_args, "muon_lr", None) is not None:
+                    opt_kwargs["muon_lr"] = training_args.muon_lr
+                if getattr(training_args, "aux_adam_lr", None) is not None:
+                    opt_kwargs["aux_adam_lr"] = training_args.aux_adam_lr
+                    opt_kwargs["aux_lr"] = training_args.aux_adam_lr
+
+                optimizer = OptimClass(filter(lambda p: p.requires_grad, model.parameters()), **{k: v for k, v in opt_kwargs.items() if v is not None})
+
+                # build scheduler if requested
+                scheduler = None
+                lr_sched_type = getattr(training_args, "lr_scheduler_type", None)
+                if lr_sched_type is not None and lr_sched_type != "constant":
+                    # estimate total steps
+                    if getattr(training_args, "max_steps", 0) and training_args.max_steps > 0:
+                        num_training_steps = training_args.max_steps
+                    else:
+                        steps_per_epoch = max(1, len(train_dataset) // max(1, training_args.per_device_train_batch_size))
+                        num_training_steps = int(steps_per_epoch * getattr(training_args, "num_train_epochs", 1))
+
+                    scheduler = get_scheduler(
+                        lr_sched_type,
+                        optimizer=optimizer,
+                        num_warmup_steps=getattr(training_args, "warmup_steps", 0),
+                        num_training_steps=num_training_steps,
+                    )
+
+                optimizers = (optimizer, scheduler)
+                logger.info(f"Using external optimizer: {training_args.optim}")
+            except Exception as e:
+                logger.warning(f"Failed to import/build sigmoid_muon optimizer: {e}")
+    except Exception:
+        optimizers = (None, None)
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -249,6 +304,7 @@ def main():
         eval_packing=training_args.packing,
         peft_config=get_peft_config(model_args),
         dataset_kwargs=training_args.dataset_kwargs,
+        optimizers=optimizers,
     )
 
     ###############
