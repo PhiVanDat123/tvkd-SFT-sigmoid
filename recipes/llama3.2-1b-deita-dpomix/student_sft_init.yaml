@@ -26,6 +26,7 @@ gradient_checkpointing: true
 gradient_checkpointing_kwargs:
   use_reentrant: false
 learning_rate: 2.0e-05
+optim: adamw_torch
 muon_lr: null
 aux_adam_lr: null
 log_level: info

@@ -252,8 +252,7 @@ class SFTConfig(transformers.TrainingArguments):
         default=True,
         metadata={"help": ("Whether to log and evaluate the first global_step or not.")},
     )
-    optim: Optional[str] = field(default="adamw_torch")
-    # Optional learning rates for Muon optimizers (can be set in YAML or CLI)
+    optim: Optional[str] = field(default=None)
     muon_lr: Optional[float] = field(
         default=None,
         metadata={"help": "Learning rate specific to the Muon internal optimizer (if using Muon optimizers)."},
